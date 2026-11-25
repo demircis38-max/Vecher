@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Вечер</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  body{margin:0;min-height:100vh;display:flex;flex-direction:column;justify-content:center;
+    align-items:center;padding:24px;box-sizing:border-box;text-align:center;
+    font-family:-apple-system,system-ui,sans-serif;
+    background:var(--tg-theme-bg-color,#15121a);color:var(--tg-theme-text-color,#fff)}
+  h1{font-size:44px;margin:0 0 8px;color:#ff5a7a}
+  p{opacity:.8;margin:6px 0}
+  button{margin-top:24px;padding:14px 28px;border:0;border-radius:14px;font-size:17px;
+    background:#ff5a7a;color:#fff;width:100%;max-width:320px}
+  button:disabled{opacity:.4}
+  label{display:flex;gap:10px;align-items:center;margin-top:20px;font-size:15px}
+  #status{margin-top:16px;font-size:14px}
+</style>
+</head>
+<body>
+  <h1>Вечер</h1>
+  <p>Знакомства для взрослых. Москва</p>
+  <label><input type="checkbox" id="age"> Мне есть 18 лет</label>
+  <button id="go" disabled>Продолжить</button>
+  <div id="status">Проверяем вход…</div>
+<script>
+const API = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/clever-endpoint";
+const tg = window.Telegram.WebApp;
+tg.ready(); tg.expand();
+const st = document.getElementById("status");
+const go = document.getElementById("go");
+const age = document.getElementById("age");
+let session = null;
+
+async function login() {
+  if (!tg.initData) { st.textContent = "Откройте приложение через Telegram"; return; }
+  try {
+    const r = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData: tg.initData })
+    });
+    const d = await r.json();
+    if (!r.ok) { st.textContent = "Ошибка входа: " + (d.error || r.status); return; }
+    session = d;
+    st.textContent = "Вход выполнен ✅";
+    go.disabled = !age.checked;
+  } catch (e) { st.textContent = "Нет связи с сервером"; }
+}
+age.addEventListener("change", () => { go.disabled = !(age.checked && session); });
+go.addEventListener("click", () => { st.textContent = "Скоро: создание профиля"; });
+login();
+</script>
+</body>
+</html>
