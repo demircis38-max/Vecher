@@ -6,8 +6,7 @@
 <title>Вечер</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
- input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;height:48px}
- body{margin:0;min-height:100vh;padding:24px;box-sizing:border-box;
+  body{margin:0;min-height:100vh;padding:24px;box-sizing:border-box;
     font-family:-apple-system,system-ui,sans-serif;
     background:var(--tg-theme-bg-color,#15121a);color:var(--tg-theme-text-color,#fff)}
   .wrap{max-width:420px;margin:0 auto}
@@ -18,6 +17,7 @@
   input,select,textarea{width:100%;box-sizing:border-box;margin-top:6px;padding:12px;
     border:1px solid #444;border-radius:12px;font-size:16px;
     background:rgba(127,127,127,.15);color:inherit}
+  input[type=date]{min-width:0;-webkit-appearance:none;appearance:none;height:48px}
   textarea{min-height:80px;resize:vertical}
   button{margin-top:22px;padding:14px;border:0;border-radius:14px;font-size:17px;
     background:#ff5a7a;color:#fff;width:100%}
@@ -25,6 +25,11 @@
   #status{margin-top:14px;font-size:14px;text-align:center}
   .hint{font-size:12px;opacity:.6;margin-top:4px;text-align:left}
   .hidden{display:none}
+  #grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+  .cell{position:relative}
+  .cell img{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:12px;display:block}
+  .cell .x{position:absolute;top:4px;right:4px;width:28px;height:28px;margin:0;padding:0;
+    border-radius:50%;background:rgba(0,0,0,.65);font-size:14px}
 </style>
 </head>
 <body>
@@ -63,7 +68,11 @@
   <div id="done" class="hidden">
     <h2 id="hello"></h2>
     <p>Профиль сохранён ✅</p>
-    <p>Скоро: фото и знакомства</p>
+    <h2>Фото</h2>
+    <div class="hint">До 6 фото. Только вы, без обнажённого тела и без других людей. Фото проверяются.</div>
+    <div id="grid"></div>
+    <input type="file" id="file" accept="image/*" class="hidden">
+    <button id="add">Добавить фото</button>
   </div>
 
   <div id="status">Проверяем вход…</div>
@@ -72,6 +81,7 @@
 <script>
 const API_AUTH = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/clever-endpoint";
 const API_PROFILE = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/smart-service";
+const API_PHOTOS = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/smart-action";
 const tg = window.Telegram.WebApp;
 tg.ready(); tg.expand();
 const $ = (id) => document.getElementById(id);
@@ -85,6 +95,9 @@ const ERR = {
   underage: "Сервис доступен только с 18 лет",
   blocked: "Доступ ограничен",
   unauthorized: "Сессия истекла, откройте приложение заново",
+  photo_limit: "Максимум 6 фото",
+  bad_image: "Не удалось обработать фото",
+  too_big: "Фото слишком большое",
 };
 
 async function call(url, payload) {
@@ -98,11 +111,56 @@ async function call(url, payload) {
   return { ok: r.ok, d };
 }
 
+function resize(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const m = 1080;
+      let w = img.naturalWidth, h = img.naturalHeight;
+      const s = Math.min(1, m / Math.max(w, h));
+      w = Math.round(w * s); h = Math.round(h * s);
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = h;
+      cv.getContext("2d").drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      res(cv.toDataURL("image/jpeg", 0.8).split(",")[1]);
+    };
+    img.onerror = () => rej(new Error("img"));
+    img.src = url;
+  });
+}
+
+async function loadPhotos() {
+  const r = await call(API_PHOTOS, { token, action: "list" });
+  const photos = (r.ok && r.d.photos) || [];
+  const g = $("grid");
+  g.innerHTML = "";
+  photos.forEach((p) => {
+    const c = document.createElement("div");
+    c.className = "cell";
+    const i = document.createElement("img");
+    i.src = p.url;
+    const x = document.createElement("button");
+    x.className = "x";
+    x.textContent = "✕";
+    x.onclick = async () => {
+      if (!confirm("Удалить фото?")) return;
+      await call(API_PHOTOS, { token, action: "delete", path: p.path });
+      loadPhotos();
+    };
+    c.append(i, x);
+    g.append(c);
+  });
+  $("add").classList.toggle("hidden", photos.length >= 6);
+}
+
 function showDone(nick) {
   $("form").classList.add("hidden");
   $("done").classList.remove("hidden");
   $("hello").textContent = "Привет, " + nick + "!";
   $("status").textContent = "";
+  loadPhotos();
 }
 
 async function start() {
@@ -133,7 +191,24 @@ $("save").addEventListener("click", async () => {
   $("save").disabled = false;
 });
 
+$("add").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", async () => {
+  const f = $("file").files[0];
+  $("file").value = "";
+  if (!f) return;
+  $("add").disabled = true;
+  $("status").textContent = "Загружаем фото…";
+  try {
+    const image = await resize(f);
+    const r = await call(API_PHOTOS, { token, action: "upload", image });
+    $("status").textContent = r.ok ? "" : (ERR[r.d.error] || "Не удалось загрузить");
+    await loadPhotos();
+  } catch (e) { $("status").textContent = "Не удалось обработать фото"; }
+  $("add").disabled = false;
+});
+
 start();
 </script>
 </body>
 </html>
+
