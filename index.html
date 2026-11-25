@@ -5,12 +5,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Вечер</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="config.js"></script>
 <style>
-  body{margin:0;min-height:100vh;padding:24px;box-sizing:border-box;
+  body{margin:0;min-height:100vh;padding:20px 20px 90px;box-sizing:border-box;
     font-family:-apple-system,system-ui,sans-serif;
     background:var(--tg-theme-bg-color,#15121a);color:var(--tg-theme-text-color,#fff)}
   .wrap{max-width:420px;margin:0 auto}
-  h1{font-size:40px;margin:8px 0;color:#ff5a7a;text-align:center}
+  h1{font-size:36px;margin:4px 0;color:#ff5a7a;text-align:center}
   h2{font-size:20px;margin:16px 0 4px}
   p{opacity:.8;margin:6px 0;text-align:center}
   label{display:block;margin-top:14px;font-size:14px;opacity:.85}
@@ -30,14 +31,33 @@
   .cell img{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:12px;display:block}
   .cell .x{position:absolute;top:4px;right:4px;width:28px;height:28px;margin:0;padding:0;
     border-radius:50%;background:rgba(0,0,0,.65);font-size:14px}
+  #deck{position:relative;margin-top:12px;min-height:60vh;touch-action:pan-y}
+  .card{position:relative;border-radius:20px;overflow:hidden;background:#222;
+    aspect-ratio:3/4;box-shadow:0 8px 24px rgba(0,0,0,.4);transition:transform .15s}
+  .card img{width:100%;height:100%;object-fit:cover;display:block}
+  .card .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+    font-size:64px;background:linear-gradient(135deg,#ff5a7a55,#5a7aff55)}
+  .info{position:absolute;left:0;right:0;bottom:0;padding:16px;color:#fff;text-align:left;
+    background:linear-gradient(transparent,rgba(0,0,0,.85))}
+  .info b{font-size:22px}
+  .tag{display:inline-block;margin-top:6px;padding:3px 10px;border-radius:12px;
+    background:rgba(255,90,122,.85);font-size:13px}
+  .info small{display:block;margin-top:6px;opacity:.9}
+  .actions{display:flex;gap:16px;justify-content:center;margin-top:16px}
+  .actions button{margin:0;width:72px;height:72px;border-radius:50%;font-size:30px;padding:0}
+  #nope{background:#444}
+  nav{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px 16px 22px;
+    background:var(--tg-theme-bg-color,#15121a);border-top:1px solid #333}
+  nav button{margin:0;padding:12px;font-size:15px;background:#333}
+  nav button.on{background:#ff5a7a}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Вечер</h1>
-  <p>Знакомства для взрослых. Москва</p>
 
   <div id="form" class="hidden">
+    <p>Знакомства для взрослых. Москва</p>
     <h2>Создайте профиль</h2>
     <label>Имя или псевдоним
       <input id="nick" maxlength="30" autocomplete="off"></label>
@@ -65,7 +85,15 @@
     <button id="save">Сохранить профиль</button>
   </div>
 
-  <div id="done" class="hidden">
+  <div id="tabDiscover" class="hidden">
+    <div id="deck"></div>
+    <div class="actions">
+      <button id="nope">✕</button>
+      <button id="yes">♥</button>
+    </div>
+  </div>
+
+  <div id="tabProfile" class="hidden">
     <h2 id="hello"></h2>
     <p>Профиль сохранён ✅</p>
     <h2>Фото</h2>
@@ -78,15 +106,20 @@
   <div id="status">Проверяем вход…</div>
 </div>
 
+<nav id="nav" class="hidden">
+  <button id="nvD" class="on">Знакомства</button>
+  <button id="nvP">Профиль</button>
+</nav>
+
 <script>
-const API_AUTH = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/clever-endpoint";
-const API_PROFILE = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/smart-service";
-const API_PHOTOS = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/smart-action";
+const C = window.CFG || {};
 const tg = window.Telegram.WebApp;
 tg.ready(); tg.expand();
 const $ = (id) => document.getElementById(id);
-let token = null;
+let token = null, queue = [], busy = false;
 
+const GOAL = { flirt: "Флирт", one_night: "Встреча на одну ночь",
+  casual: "Встречи без обязательств", relationship: "Отношения" };
 const ERR = {
   invalid_nickname: "Имя: от 2 до 30 символов",
   invalid_district: "Выберите район",
@@ -101,11 +134,8 @@ const ERR = {
 };
 
 async function call(url, payload) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const r = await fetch(url, { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   let d = {};
   try { d = await r.json(); } catch (e) {}
   return { ok: r.ok, d };
@@ -132,60 +162,111 @@ function resize(file) {
 }
 
 async function loadPhotos() {
-  const r = await call(API_PHOTOS, { token, action: "list" });
+  const r = await call(C.PHOTOS, { token, action: "list" });
   const photos = (r.ok && r.d.photos) || [];
-  const g = $("grid");
-  g.innerHTML = "";
+  const g = $("grid"); g.innerHTML = "";
   photos.forEach((p) => {
-    const c = document.createElement("div");
-    c.className = "cell";
-    const i = document.createElement("img");
-    i.src = p.url;
-    const x = document.createElement("button");
-    x.className = "x";
-    x.textContent = "✕";
+    const c = document.createElement("div"); c.className = "cell";
+    const i = document.createElement("img"); i.src = p.url;
+    const x = document.createElement("button"); x.className = "x"; x.textContent = "✕";
     x.onclick = async () => {
       if (!confirm("Удалить фото?")) return;
-      await call(API_PHOTOS, { token, action: "delete", path: p.path });
+      await call(C.PHOTOS, { token, action: "delete", path: p.path });
       loadPhotos();
     };
-    c.append(i, x);
-    g.append(c);
+    c.append(i, x); g.append(c);
   });
   $("add").classList.toggle("hidden", photos.length >= 6);
 }
 
-function showDone(nick) {
-  $("form").classList.add("hidden");
-  $("done").classList.remove("hidden");
-  $("hello").textContent = "Привет, " + nick + "!";
+function tab(name) {
+  $("tabDiscover").classList.toggle("hidden", name !== "d");
+  $("tabProfile").classList.toggle("hidden", name !== "p");
+  $("nvD").classList.toggle("on", name === "d");
+  $("nvP").classList.toggle("on", name === "p");
   $("status").textContent = "";
+}
+
+function showApp(nick) {
+  $("form").classList.add("hidden");
+  $("nav").classList.remove("hidden");
+  $("hello").textContent = "Привет, " + nick + "!";
+  tab("d");
   loadPhotos();
+  loadFeed();
+}
+
+async function loadFeed() {
+  const r = await call(C.DISCOVER, { token, action: "feed" });
+  queue = (r.ok && r.d.profiles) || [];
+  render();
+}
+
+function render() {
+  const box = $("deck"); box.innerHTML = "";
+  if (!queue.length) {
+    box.innerHTML = '<p style="margin-top:40px">Пока никого нет рядом. Загляните позже.</p>';
+    $("yes").disabled = $("nope").disabled = true; return;
+  }
+  $("yes").disabled = $("nope").disabled = false;
+  const p = queue[0];
+  const card = document.createElement("div"); card.className = "card";
+  if (p.photo) { const i = document.createElement("img"); i.src = p.photo; card.append(i); }
+  else { const d = document.createElement("div"); d.className = "ph"; d.textContent = "👤"; card.append(d); }
+  const info = document.createElement("div"); info.className = "info";
+  const b = document.createElement("b"); b.textContent = p.nickname + ", " + p.age;
+  const t = document.createElement("div"); t.className = "tag"; t.textContent = GOAL[p.goal] || "";
+  const s = document.createElement("small"); s.textContent = p.district + (p.bio ? " · " + p.bio : "");
+  info.append(b, t, s); card.append(info); box.append(card);
+
+  let sx = 0, dx = 0;
+  card.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; dx = 0; card.style.transition = "none"; });
+  card.addEventListener("touchmove", (e) => {
+    dx = e.touches[0].clientX - sx;
+    card.style.transform = "translateX(" + dx + "px) rotate(" + dx / 20 + "deg)";
+  });
+  card.addEventListener("touchend", () => {
+    card.style.transition = "transform .15s";
+    if (dx > 100) act("like"); else if (dx < -100) act("pass");
+    else card.style.transform = "";
+  });
+}
+
+async function act(kind) {
+  if (busy || !queue.length) return;
+  busy = true;
+  const p = queue.shift();
+  render();
+  try {
+    const r = await call(C.DISCOVER, { token, action: "swipe", to: p.id, kind });
+    if (r.ok && r.d.match) {
+      $("status").textContent = "Это взаимно! 💬 С " + p.nickname + " (чат скоро)";
+    }
+  } catch (e) { $("status").textContent = "Нет связи с сервером"; }
+  if (!queue.length) await loadFeed();
+  busy = false;
 }
 
 async function start() {
   if (!tg.initData) { $("status").textContent = "Откройте приложение через Telegram"; return; }
   try {
-    const a = await call(API_AUTH, { initData: tg.initData });
+    const a = await call(C.AUTH, { initData: tg.initData });
     if (!a.ok) { $("status").textContent = ERR[a.d.error] || "Ошибка входа"; return; }
     token = a.d.token;
-    const p = await call(API_PROFILE, { token, action: "get" });
-    if (p.ok && p.d.profile) { showDone(p.d.profile.nickname); return; }
+    const p = await call(C.PROFILE, { token, action: "get" });
+    if (p.ok && p.d.profile) { showApp(p.d.profile.nickname); return; }
     $("form").classList.remove("hidden");
     $("status").textContent = "";
   } catch (e) { $("status").textContent = "Нет связи с сервером"; }
 }
 
 $("save").addEventListener("click", async () => {
-  $("save").disabled = true;
-  $("status").textContent = "Сохраняем…";
+  $("save").disabled = true; $("status").textContent = "Сохраняем…";
   try {
-    const r = await call(API_PROFILE, {
-      token, action: "save",
+    const r = await call(C.PROFILE, { token, action: "save",
       nickname: $("nick").value, birth_date: $("birth").value,
-      district: $("district").value, goal: $("goal").value, bio: $("bio").value,
-    });
-    if (r.ok) { showDone($("nick").value.trim()); return; }
+      district: $("district").value, goal: $("goal").value, bio: $("bio").value });
+    if (r.ok) { showApp($("nick").value.trim()); return; }
     $("status").textContent = ERR[r.d.error] || "Не удалось сохранить";
   } catch (e) { $("status").textContent = "Нет связи с сервером"; }
   $("save").disabled = false;
@@ -193,22 +274,24 @@ $("save").addEventListener("click", async () => {
 
 $("add").addEventListener("click", () => $("file").click());
 $("file").addEventListener("change", async () => {
-  const f = $("file").files[0];
-  $("file").value = "";
+  const f = $("file").files[0]; $("file").value = "";
   if (!f) return;
-  $("add").disabled = true;
-  $("status").textContent = "Загружаем фото…";
+  $("add").disabled = true; $("status").textContent = "Загружаем фото…";
   try {
     const image = await resize(f);
-    const r = await call(API_PHOTOS, { token, action: "upload", image });
+    const r = await call(C.PHOTOS, { token, action: "upload", image });
     $("status").textContent = r.ok ? "" : (ERR[r.d.error] || "Не удалось загрузить");
     await loadPhotos();
   } catch (e) { $("status").textContent = "Не удалось обработать фото"; }
   $("add").disabled = false;
 });
 
+$("yes").addEventListener("click", () => act("like"));
+$("nope").addEventListener("click", () => act("pass"));
+$("nvD").addEventListener("click", () => tab("d"));
+$("nvP").addEventListener("click", () => tab("p"));
+
 start();
 </script>
 </body>
 </html>
-
