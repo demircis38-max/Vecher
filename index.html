@@ -6,52 +6,133 @@
 <title>Вечер</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-  body{margin:0;min-height:100vh;display:flex;flex-direction:column;justify-content:center;
-    align-items:center;padding:24px;box-sizing:border-box;text-align:center;
+  body{margin:0;min-height:100vh;padding:24px;box-sizing:border-box;
     font-family:-apple-system,system-ui,sans-serif;
     background:var(--tg-theme-bg-color,#15121a);color:var(--tg-theme-text-color,#fff)}
-  h1{font-size:44px;margin:0 0 8px;color:#ff5a7a}
-  p{opacity:.8;margin:6px 0}
-  button{margin-top:24px;padding:14px 28px;border:0;border-radius:14px;font-size:17px;
-    background:#ff5a7a;color:#fff;width:100%;max-width:320px}
+  .wrap{max-width:420px;margin:0 auto}
+  h1{font-size:40px;margin:8px 0;color:#ff5a7a;text-align:center}
+  h2{font-size:20px;margin:16px 0 4px}
+  p{opacity:.8;margin:6px 0;text-align:center}
+  label{display:block;margin-top:14px;font-size:14px;opacity:.85}
+  input,select,textarea{width:100%;box-sizing:border-box;margin-top:6px;padding:12px;
+    border:1px solid #444;border-radius:12px;font-size:16px;
+    background:rgba(127,127,127,.15);color:inherit}
+  textarea{min-height:80px;resize:vertical}
+  button{margin-top:22px;padding:14px;border:0;border-radius:14px;font-size:17px;
+    background:#ff5a7a;color:#fff;width:100%}
   button:disabled{opacity:.4}
-  label{display:flex;gap:10px;align-items:center;margin-top:20px;font-size:15px}
-  #status{margin-top:16px;font-size:14px}
+  #status{margin-top:14px;font-size:14px;text-align:center}
+  .hint{font-size:12px;opacity:.6;margin-top:4px;text-align:left}
+  .hidden{display:none}
 </style>
 </head>
 <body>
+<div class="wrap">
   <h1>Вечер</h1>
   <p>Знакомства для взрослых. Москва</p>
-  <label><input type="checkbox" id="age"> Мне есть 18 лет</label>
-  <button id="go" disabled>Продолжить</button>
+
+  <div id="form" class="hidden">
+    <h2>Создайте профиль</h2>
+    <label>Имя или псевдоним
+      <input id="nick" maxlength="30" autocomplete="off"></label>
+    <label>Дата рождения
+      <input id="birth" type="date">
+      <div class="hint">Только для проверки возраста (18+). Другим показывается лишь возраст.</div></label>
+    <label>Район Москвы
+      <select id="district">
+        <option value="">Выберите…</option>
+        <option>ЦАО</option><option>САО</option><option>СВАО</option>
+        <option>ВАО</option><option>ЮВАО</option><option>ЮАО</option>
+        <option>ЮЗАО</option><option>ЗАО</option><option>СЗАО</option>
+        <option>Зеленоград</option><option>Новая Москва</option>
+      </select></label>
+    <label>Что вы ищете
+      <select id="goal">
+        <option value="">Выберите…</option>
+        <option value="flirt">Флирт</option>
+        <option value="one_night">Встреча на одну ночь</option>
+        <option value="casual">Регулярные встречи без обязательств</option>
+        <option value="relationship">Отношения</option>
+      </select></label>
+    <label>О себе (до 300 символов)
+      <textarea id="bio" maxlength="300"></textarea></label>
+    <button id="save">Сохранить профиль</button>
+  </div>
+
+  <div id="done" class="hidden">
+    <h2 id="hello"></h2>
+    <p>Профиль сохранён ✅</p>
+    <p>Скоро: фото и знакомства</p>
+  </div>
+
   <div id="status">Проверяем вход…</div>
+</div>
+
 <script>
-const API = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/clever-endpoint";
+const API_AUTH = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/clever-endpoint";
+const API_PROFILE = "https://fysubsqhlsaxktxhrtpb.supabase.co/functions/v1/smart-service";
 const tg = window.Telegram.WebApp;
 tg.ready(); tg.expand();
-const st = document.getElementById("status");
-const go = document.getElementById("go");
-const age = document.getElementById("age");
-let session = null;
+const $ = (id) => document.getElementById(id);
+let token = null;
 
-async function login() {
-  if (!tg.initData) { st.textContent = "Откройте приложение через Telegram"; return; }
-  try {
-    const r = await fetch(API, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initData: tg.initData })
-    });
-    const d = await r.json();
-    if (!r.ok) { st.textContent = "Ошибка входа: " + (d.error || r.status); return; }
-    session = d;
-    st.textContent = "Вход выполнен ✅";
-    go.disabled = !age.checked;
-  } catch (e) { st.textContent = "Нет связи с сервером"; }
+const ERR = {
+  invalid_nickname: "Имя: от 2 до 30 символов",
+  invalid_district: "Выберите район",
+  invalid_goal: "Выберите, что вы ищете",
+  invalid_birth: "Проверьте дату рождения",
+  underage: "Сервис доступен только с 18 лет",
+  blocked: "Доступ ограничен",
+  unauthorized: "Сессия истекла, откройте приложение заново",
+};
+
+async function call(url, payload) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let d = {};
+  try { d = await r.json(); } catch (e) {}
+  return { ok: r.ok, d };
 }
-age.addEventListener("change", () => { go.disabled = !(age.checked && session); });
-go.addEventListener("click", () => { st.textContent = "Скоро: создание профиля"; });
-login();
+
+function showDone(nick) {
+  $("form").classList.add("hidden");
+  $("done").classList.remove("hidden");
+  $("hello").textContent = "Привет, " + nick + "!";
+  $("status").textContent = "";
+}
+
+async function start() {
+  if (!tg.initData) { $("status").textContent = "Откройте приложение через Telegram"; return; }
+  try {
+    const a = await call(API_AUTH, { initData: tg.initData });
+    if (!a.ok) { $("status").textContent = ERR[a.d.error] || "Ошибка входа"; return; }
+    token = a.d.token;
+    const p = await call(API_PROFILE, { token, action: "get" });
+    if (p.ok && p.d.profile) { showDone(p.d.profile.nickname); return; }
+    $("form").classList.remove("hidden");
+    $("status").textContent = "";
+  } catch (e) { $("status").textContent = "Нет связи с сервером"; }
+}
+
+$("save").addEventListener("click", async () => {
+  $("save").disabled = true;
+  $("status").textContent = "Сохраняем…";
+  try {
+    const r = await call(API_PROFILE, {
+      token, action: "save",
+      nickname: $("nick").value, birth_date: $("birth").value,
+      district: $("district").value, goal: $("goal").value, bio: $("bio").value,
+    });
+    if (r.ok) { showDone($("nick").value.trim()); return; }
+    $("status").textContent = ERR[r.d.error] || "Не удалось сохранить";
+  } catch (e) { $("status").textContent = "Нет связи с сервером"; }
+  $("save").disabled = false;
+});
+
+start();
 </script>
 </body>
 </html>
